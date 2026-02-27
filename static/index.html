@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathfinder Puzzle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for grid */
+        #game-board {
+            display: grid;
+            gap: 1px;
+            background-color: #333;
+            /* Dark background lines */
+            padding: 1px;
+            border: 4px solid #4ade80;
+            /* Tailwind green-400 */
+            border-radius: 0.5rem;
+        }
+
+        .cell {
+            width: 24px;
+            height: 24px;
+        }
+
+        .wall {
+            background-color: #1f2937;
+        }
+
+        /* gray-800 */
+        .path {
+            background-color: #f3f4f6;
+        }
+
+        /* gray-100 */
+        .goal {
+            background-color: #ef4444;
+        }
+
+        /* red-500 */
+        .fog {
+            background-color: #000;
+            /* pitch black */
+            box-shadow: inset 0 0 10px #000;
+            /* inward shadow */
+        }
+
+        .player {
+            background-color: #3b82f6;
+            /* blue-500 */
+            border-radius: 50%;
+            transform: scale(0.8);
+            box-shadow: 0 0 15px 5px rgba(59, 130, 246, 0.5);
+            /* Glow effect */
+        }
+    </style>
+</head>
+
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center font-sans">
+
+    <div class="mb-6 mx-auto max-w-2xl w-full">
+        <h1 class="text-4xl font-bold text-green-400 mb-2 tracking-wide text-center">Pathfinder Puzzle</h1>
+        <p class="text-gray-400 mb-4 text-center">Use Arrow Keys (🡡, 🡣, 🡠, 🡢) to move.</p>
+
+        <!-- Controls Panel -->
+        <div
+            class="bg-gray-800 p-4 rounded-lg shadow-lg flex flex-wrap gap-4 items-end justify-between border border-gray-700">
+            <div class="flex gap-4">
+                <div class="flex flex-col">
+                    <label class="text-xs text-gray-400 font-semibold mb-1 uppercase tracking-wider">Width</label>
+                    <input type="number" id="maze-width" value="21" min="5" max="51" step="2"
+                        class="bg-gray-900 border border-gray-600 rounded px-3 py-2 w-20 text-white focus:outline-none focus:border-green-400">
+                </div>
+                <div class="flex flex-col">
+                    <label class="text-xs text-gray-400 font-semibold mb-1 uppercase tracking-wider">Height</label>
+                    <input type="number" id="maze-height" value="21" min="5" max="51" step="2"
+                        class="bg-gray-900 border border-gray-600 rounded px-3 py-2 w-20 text-white focus:outline-none focus:border-green-400">
+                </div>
+                <div class="flex flex-col justify-end pb-2">
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" id="fog-toggle" checked
+                            class="w-4 h-4 text-green-500 bg-gray-900 border-gray-600 rounded focus:ring-green-500 focus:ring-2">
+                        <span class="text-sm font-semibold text-gray-300">Fog of War</span>
+                    </label>
+                </div>
+            </div>
+
+            <button id="btn-restart"
+                class="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-6 rounded transition-colors duration-200">
+                Generate New Maze
+            </button>
+        </div>
+
+        <div class="mt-4 flex gap-6 justify-center text-lg">
+            <div class="bg-gray-800 px-4 py-2 rounded shadow border border-gray-700">
+                Steps: <span id="steps-counter" class="font-bold text-blue-400">0</span>
+            </div>
+            <div id="status-message"
+                class="bg-gray-800 px-4 py-2 rounded shadow text-yellow-400 font-semibold border border-gray-700 hidden">
+                Connecting...
+            </div>
+        </div>
+    </div>
+
+    <!-- The actual Grid Container -->
+    <div id="game-board" class="shadow-2xl shadow-green-900/50"></div>
+
+    <script>
+        const ws = new WebSocket("ws://" + window.location.host + "/ws");
+        const board = document.getElementById("game-board");
+        const stepsCounter = document.getElementById("steps-counter");
+        const statusMsg = document.getElementById("status-message");
+
+        // Controls
+        const btnRestart = document.getElementById("btn-restart");
+        const inputWidth = document.getElementById("maze-width");
+        const inputHeight = document.getElementById("maze-height");
+        const fogToggle = document.getElementById("fog-toggle");
+
+        // Cell Types
+        const WALL = 1;
+        const PATH = 0;
+        const GOAL = 2;
+
+        let gameState = null;
+
+        ws.onopen = () => {
+            console.log("WebSocket Connected");
+            statusMsg.classList.add("hidden");
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket Disconnected");
+            statusMsg.textContent = "Disconnected from server";
+            statusMsg.classList.remove("hidden");
+            statusMsg.classList.add("text-red-500");
+        };
+
+        <!-- Parse incoming game state -->
+        ws.onmessage = (event) => {
+            gameState = JSON.parse(event.data);
+            renderBoard();
+
+            if (gameState.won) {
+                statusMsg.textContent = "🎉 YOU WIN! 🎉";
+                statusMsg.classList.remove("hidden");
+                statusMsg.classList.remove("text-yellow-400", "text-red-500");
+                statusMsg.classList.add("text-green-400", "animate-pulse");
+            } else {
+                statusMsg.classList.add("hidden"); // hide won message on restart
+            }
+        };
+
+        function renderBoard() {
+            if (!gameState || !gameState.maze) return;
+
+            const grid = gameState.maze.Grid;
+            const px = gameState.player.x;
+            const py = gameState.player.y;
+
+            // Setup CSS Grid columns/rows based on Server's Maze Width/Height
+            board.style.gridTemplateColumns = `repeat(${gameState.maze.Width}, 1fr)`;
+
+            board.innerHTML = ''; // Clear previous frame
+            stepsCounter.textContent = gameState.steps;
+
+            // Traverse a 2D Array
+            for (let y = 0; y < gameState.maze.Height; y++) {
+                for (let x = 0; x < gameState.maze.Width; x++) {
+                    let cellDiv = document.createElement("div");
+                    cellDiv.classList.add("cell");
+
+                    // Distance Calculation for Fog of War
+                    const distance = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+                    const fogEnabled = fogToggle.checked;
+
+                    if (fogEnabled && distance > 3.5 && !gameState.won) {
+                        // If cell is outside visibility radius And game is not won yet
+                        cellDiv.classList.add("fog");
+                    } else {
+                        // Render normally
+                        let val = grid[y][x];
+                        if (val === WALL) {
+                            cellDiv.classList.add("wall");
+                        } else if (val === PATH) {
+                            cellDiv.classList.add("path");
+                        } else if (val === GOAL) {
+                            cellDiv.classList.add("goal");
+                        }
+
+                        // Check if player is on this cell
+                        if (x === px && y === py) {
+                            let playerDot = document.createElement("div");
+                            playerDot.classList.add("w-full", "h-full", "player", "shadow-md");
+                            cellDiv.appendChild(playerDot);
+                            cellDiv.classList.add("path");
+                        }
+                    }
+
+                    board.appendChild(cellDiv);
+                }
+            }
+        }
+
+        // Re-render board immediately when fog toggle is clicked
+        fogToggle.addEventListener("change", () => {
+            renderBoard();
+            // Re-focus grid area mentally by blurring toggle
+            fogToggle.blur();
+        });
+
+        // Request new maze from server
+        btnRestart.addEventListener("click", () => {
+            let w = parseInt(inputWidth.value) || 21;
+            let h = parseInt(inputHeight.value) || 21;
+
+            btnRestart.textContent = "Generating...";
+            btnRestart.disabled = true;
+
+            // Prevent grid blow up on client side by enforcing max limits on inputs if user typed
+            if (w > 51) { w = 51; inputWidth.value = 51; }
+            if (h > 51) { h = 51; inputHeight.value = 51; }
+            if (w < 5) { w = 5; inputWidth.value = 5; }
+            if (h < 5) { h = 5; inputHeight.value = 5; }
+
+            ws.send(JSON.stringify({
+                action: "restart",
+                width: w,
+                height: h
+            }));
+
+            setTimeout(() => {
+                btnRestart.textContent = "Generate New Maze";
+                btnRestart.disabled = false;
+                // Re-focus grid area mentally by blurring button so arrow keys don't trigger button again
+                btnRestart.blur();
+            }, 300);
+        });
+
+        // Listen for keyboard arrow interactions
+        window.addEventListener("keydown", (e) => {
+            if (!gameState || gameState.won) return;
+
+            let direction = "";
+            switch (e.key) {
+                case "ArrowUp": direction = "up"; break;
+                case "ArrowDown": direction = "down"; break;
+                case "ArrowLeft": direction = "left"; break;
+                case "ArrowRight": direction = "right"; break;
+                default: return; // ignore other keys
+            }
+
+            // Prevent default scroll behavior
+            e.preventDefault();
+
+            // Send move command to the server
+            ws.send(JSON.stringify({
+                action: "move",
+                direction: direction
+            }));
+        });
+    </script>
+</body>
+<!-- https://github.com/YukiHime23/pathfinder-puzzle -->
+
+</html>
